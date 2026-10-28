@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fieldnote-diagnostics"
-version = "0.3.0"
+version = "0.4.0"
 description = "Read-only Windows, Linux and macOS diagnostics with any Ollama model"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -57,7 +57,7 @@ include-package-data = true
 include = ["fieldnote*"]
 
 [tool.setuptools.package-data]
-fieldnote = ["index.html", "system_prompt.txt"]
+fieldnote = ["index.html", "system_prompt.txt", "agent_prompt.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

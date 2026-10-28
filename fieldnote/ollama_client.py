@@ -20,7 +20,7 @@ def default_model() -> str:
     return (
         os.getenv("DIAG_MODEL")
         or os.getenv("OLLAMA_MODEL")
-        or "nemotron-3-nano:30b-cloud"
+        or "beam:cloud"
     )
 
 

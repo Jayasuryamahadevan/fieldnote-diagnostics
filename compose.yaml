@@ -11,6 +11,7 @@ services:
       - no-new-privileges:true
     environment:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      DIAG_MODEL: ${DIAG_MODEL:-nemotron-3-nano:30b-cloud}
+      DIAG_MODEL: ${DIAG_MODEL:-beam:cloud}
+      DIAG_BACKEND: ${DIAG_BACKEND:-ollama}
     extra_hosts:
       - "host.docker.internal:host-gateway"

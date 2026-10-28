@@ -8,7 +8,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .ollama_client import ask, default_model
+from . import claude_code
+from .ollama_client import ask, available, default_model
 
 FALLBACK_PROMPT = (
     "You are a careful system diagnostic analyst. Use only the supplied evidence. "
@@ -18,10 +19,9 @@ FALLBACK_PROMPT = (
     "Uncertainty."
 )
 
+SYSTEM_PROMPT_PATH = Path(__file__).with_name("system_prompt.txt")
 try:
-    SYSTEM_PROMPT = Path(__file__).with_name("system_prompt.txt").read_text(
-        encoding="utf-8"
-    ).strip()
+    SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 except OSError:
     SYSTEM_PROMPT = FALLBACK_PROMPT
 
@@ -38,6 +38,22 @@ A DNS cache flush may not fix the issue and is not proof of a root cause. If the
 evidence is insufficient or the host is not Windows, choose `none`.
 You cannot execute commands. Return ONLY one JSON object with exactly these keys:
 {"action": "flush_dns_cache" or "none", "reason": "short explanation"}"""
+
+
+def backend_name() -> str:
+    """Return ``claude`` or ``ollama`` for the analysis stage."""
+    configured = os.getenv("DIAG_BACKEND", "").strip().lower()
+    if configured in ("claude", "claude-code", "claudecode"):
+        return "claude"
+    if configured in ("ollama", "direct", "api"):
+        return "ollama"
+    return "claude" if claude_code.available() else "ollama"
+
+
+def backend_available() -> bool:
+    if backend_name() == "claude":
+        return claude_code.available() and available()
+    return available()
 
 
 def analyser_model() -> str:
@@ -59,17 +75,48 @@ def rectifier_model() -> str:
     )
 
 
+async def request_model(
+    model: str,
+    system_prompt_file: str | Path,
+    system_prompt: str,
+    payload: dict[str, Any],
+    timeout: float = 180,
+    *,
+    json_mode: bool = False,
+    max_output: int = 1200,
+) -> str:
+    """Send one prompt to the configured backend and return its text."""
+    if backend_name() == "claude":
+        return await claude_code.ask(
+            model,
+            system_prompt_file,
+            payload,
+            timeout=timeout,
+        )
+    return await ask(
+        model,
+        system_prompt,
+        payload,
+        timeout=timeout,
+        json_mode=json_mode,
+        max_output=max_output,
+    )
+
+
 async def analyse(
     model: str,
     complaint: str,
     evidence: dict[str, Any],
     timeout: float = 180,
 ) -> str:
-    return await ask(
+    payload = {"complaint": complaint, "evidence": evidence}
+    return await request_model(
         model,
+        SYSTEM_PROMPT_PATH,
         SYSTEM_PROMPT,
-        {"complaint": complaint, "evidence": evidence},
+        payload,
         timeout=timeout,
+        json_mode=False,
         max_output=1200,
     )
 
@@ -120,5 +167,5 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
         else:
             value = None
     if not isinstance(value, dict):
-        raise ValueError("The rectifier did not return a JSON object; no action taken.")
+        raise ValueError("The model did not return a JSON object.")
     return value

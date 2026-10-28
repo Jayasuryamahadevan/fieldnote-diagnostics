@@ -20,14 +20,19 @@ def test_inspect(monkeypatch, capsys):
 
 
 def test_analyze_json(monkeypatch, capsys):
-    async def fake_analyse(model, complaint, evidence, timeout=180):
+    async def fake_investigate(model, complaint, evidence, timeout=180):
         assert model == "test:model"
         assert complaint == "Slow PC"
         assert timeout == 30
-        return "The evidence is limited."
+        return {
+            "analysis": "The evidence is limited.",
+            "commands": [
+                {"command": "uname -s", "allowed": True, "exit_code": 0, "output": "Linux"}
+            ],
+        }
 
     monkeypatch.setattr(cli, "collect_system", lambda: {"os": "Linux", "cpu_count": 8})
-    monkeypatch.setattr(cli, "analyse", fake_analyse)
+    monkeypatch.setattr(cli, "investigate", fake_investigate)
 
     code = cli.main(
         ["analyze", "Slow PC", "--json", "--model", "test:model", "--timeout", "30"]
@@ -36,8 +41,24 @@ def test_analyze_json(monkeypatch, capsys):
     result = json.loads(capsys.readouterr().out)
     assert result["model"] == "test:model"
     assert result["analysis"] == "The evidence is limited."
+    assert result["backend"] in {"claude", "ollama"}
+    assert result["commands"][0]["command"] == "uname -s"
     assert result["action"] is None
     assert result["action_supported"] is False
+
+
+def test_analyze_can_disable_commands(monkeypatch, capsys):
+    async def fake_analyse(model, complaint, evidence, timeout=180):
+        return "No commands."
+
+    monkeypatch.setattr(cli, "collect_system", lambda: {"os": "Linux"})
+    monkeypatch.setattr(cli, "analyse", fake_analyse)
+
+    code = cli.main(["analyze", "Slow PC", "--json", "--no-commands"])
+    assert code == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["analysis"] == "No commands."
+    assert result["commands"] == []
 
 
 def test_empty_complaint_is_rejected(capsys):
@@ -53,6 +74,53 @@ def test_bad_dns_host_is_rejected(capsys):
 def test_short_timeout_is_rejected(capsys):
     assert cli.main(["analyze", "Slow PC", "--timeout", "1"]) == 1
     assert "timeout must be at least" in capsys.readouterr().err
+
+
+def test_start_uses_existing_ollama_and_schedules_browser(monkeypatch, capsys):
+    events = []
+    monkeypatch.setattr(cli, "server_status", lambda timeout=2: (True, "ok"))
+    monkeypatch.setattr(cli, "_serve", lambda args: events.append(args) or 0)
+    monkeypatch.setattr(cli, "_schedule_browser", lambda url: events.append(url))
+
+    assert cli.main(["start", "--port", "8123"]) == 0
+    assert events[0] == "http://127.0.0.1:8123"
+    assert events[1].port == 8123
+    assert "Fieldnote: http://127.0.0.1:8123" in capsys.readouterr().out
+
+
+def test_start_can_skip_browser(monkeypatch):
+    events = []
+    monkeypatch.setattr(cli, "server_status", lambda timeout=2: (True, "ok"))
+    monkeypatch.setattr(cli, "_serve", lambda args: 0)
+    monkeypatch.setattr(cli, "_schedule_browser", events.append)
+
+    assert cli.main(["start", "--no-browser"]) == 0
+    assert events == []
+
+
+def test_ensure_ollama_starts_local_server(monkeypatch, tmp_path):
+    statuses = iter([False, False, True])
+    calls = []
+
+    class FakeProcess:
+        pid = 123
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(cli, "server_status", lambda timeout=2: (next(statuses, True), "ok"))
+    monkeypatch.setattr(cli, "host", lambda: "http://127.0.0.1:11434")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/ollama")
+    monkeypatch.setattr(cli.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "Popen",
+        lambda command, **kwargs: calls.append((command, kwargs)) or FakeProcess(),
+    )
+
+    assert cli._ensure_ollama() is True
+    assert calls[0][0] == ["/usr/bin/ollama", "serve"]
 
 
 def test_doctor_offline(monkeypatch, capsys):
@@ -87,6 +155,15 @@ def test_analyze_async_runner(monkeypatch):
             "dns_host": None,
             "model": "m",
             "json": False,
+            "no_commands": True,
         },
     )()
     assert asyncio.run(cli._analyze(args)) == 0
+
+
+def test_doctor_forced_claude_missing(monkeypatch, capsys):
+    monkeypatch.setenv("DIAG_BACKEND", "claude")
+    monkeypatch.setattr(cli, "server_status", lambda: (True, "ok"))
+    monkeypatch.setattr(cli.claude_code, "available", lambda: False)
+    assert cli.main(["doctor"]) == 1
+    assert "not found" in capsys.readouterr().out

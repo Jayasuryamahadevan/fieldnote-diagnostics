@@ -11,8 +11,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import __version__
-from .analysis import analyse, analyser_model
+from . import __version__, claude_code
+from .agent import investigate
+from .analysis import analyse, analyser_model, backend_available, backend_name
 from .collector import collect_system, dns_check
 from .ollama_client import available, host, list_models
 
@@ -30,6 +31,7 @@ class DiagnosisRequest(BaseModel):
     complaint: str = Field(min_length=3, max_length=4000)
     dns_host: str | None = Field(default=None, max_length=253)
     model: str | None = Field(default=None, max_length=200)
+    allow_commands: bool = True
 
 
 @app.get("/")
@@ -48,6 +50,9 @@ def status() -> dict[str, object]:
     return {
         "os": {"Darwin": "macOS"}.get(system, system),
         "ollama_available": available(),
+        "backend": backend_name(),
+        "backend_available": backend_available(),
+        "claude_available": claude_code.available(),
         "ollama_host": host(),
         "container": Path("/.dockerenv").exists(),
         "model": analyser_model(),
@@ -65,9 +70,26 @@ def evidence() -> dict[str, object]:
     return collect_system()
 
 
+def _public_error(error: Exception) -> str:
+    text = str(error)
+    text = text.replace("Claude Code", "the model service")
+    text = text.replace("CLAUDE_BIN", "the model service")
+    default = analyser_model()
+    if default:
+        text = text.replace(default, "the default model")
+    return text
+
+
 @app.post("/api/diagnose")
 async def diagnose(body: DiagnosisRequest) -> dict[str, object]:
-    if not await asyncio.to_thread(available):
+    backend = backend_name()
+    if not await asyncio.to_thread(backend_available):
+        if backend == "claude":
+            raise HTTPException(
+                503,
+                "The configured model service and Ollama must both be available. "
+                "Run 'fieldnote doctor' or check the model backend.",
+            )
         raise HTTPException(
             503,
             'Ollama is not reachable. Start it and run "ollama signin".',
@@ -84,19 +106,23 @@ async def diagnose(body: DiagnosisRequest) -> dict[str, object]:
 
     async with LIMIT:
         observed = await asyncio.to_thread(collect_system)
-        observed["dns"] = (
-            await asyncio.to_thread(dns_check, body.dns_host)
-            if body.dns_host
-            else "not tested"
-        )
+        observed["dns"] = await asyncio.to_thread(dns_check, body.dns_host) if body.dns_host else "not tested"
+        commands: list[dict[str, object]] = []
         try:
-            analysis = await analyse(model, body.complaint, observed)
+            if body.allow_commands:
+                outcome = await investigate(model, body.complaint, observed)
+                analysis = outcome["analysis"]
+                commands = outcome["commands"]
+            else:
+                analysis = await analyse(model, body.complaint, observed)
         except Exception as error:
-            raise HTTPException(503, f"Model request failed: {error}") from error
+            raise HTTPException(503, f"Model request failed: {_public_error(error)}") from error
         return {
             "analysis": analysis,
+            "commands": commands,
             "evidence": observed,
             "model": model,
+            "backend": backend,
             "version": __version__,
             "repair": "No repair is run from the web interface.",
         }

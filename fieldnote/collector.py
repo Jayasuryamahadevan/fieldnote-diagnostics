@@ -7,6 +7,7 @@ No event messages, process names, file contents or user documents are read.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import platform
@@ -19,6 +20,19 @@ from typing import Any
 import psutil
 
 GIB = 1024**3
+
+PSEUDO_FILESYSTEMS = {
+    "autofs",
+    "cgroup",
+    "cgroup2",
+    "devfs",
+    "devtmpfs",
+    "proc",
+    "ramfs",
+    "squashfs",
+    "sysfs",
+    "tmpfs",
+}
 
 WINDOWS_SCRIPT = r"""
 $ErrorActionPreference = 'SilentlyContinue'
@@ -39,6 +53,10 @@ try {
   $result.os_caption = $os.Caption
   $result.os_version = $os.Version
   $result.last_boot = $os.LastBootUpTime.ToString('o')
+} catch {}
+try {
+  $result.video_controllers = @(Get-CimInstance Win32_VideoController -ErrorAction Stop |
+    Select-Object -First 10 Name,Status,VideoModeDescription,CurrentHorizontalResolution,CurrentVerticalResolution)
 } catch {}
 $result | ConvertTo-Json -Depth 5 -Compress
 """
@@ -163,6 +181,8 @@ def _base_evidence() -> dict[str, Any]:
     for partition in partitions[:20]:
         if partition.mountpoint in seen:
             continue
+        if (partition.fstype or "").lower() in PSEUDO_FILESYSTEMS:
+            continue
         seen.add(partition.mountpoint)
         try:
             usage = psutil.disk_usage(partition.mountpoint)
@@ -179,6 +199,59 @@ def _base_evidence() -> dict[str, Any]:
         )
     evidence["disks"] = disks
     return evidence
+
+
+def _linux_display() -> dict[str, Any]:
+    display: dict[str, Any] = {}
+    connectors: list[dict[str, str]] = []
+    for status_path in sorted(glob.glob("/sys/class/drm/card*-*/status"))[:20]:
+        connector = os.path.basename(os.path.dirname(status_path))
+        try:
+            with open(status_path, encoding="ascii") as status_file:
+                status = status_file.read().strip()
+        except OSError:
+            continue
+        entry = {"connector": connector, "status": status}
+        for field in ("enabled", "dpms"):
+            field_path = os.path.join(os.path.dirname(status_path), field)
+            try:
+                with open(field_path, encoding="ascii") as field_file:
+                    value = field_file.read().strip()
+            except OSError:
+                continue
+            if value:
+                entry[field] = value
+        connectors.append(entry)
+    if connectors:
+        display["drm_connectors"] = connectors
+
+    xrandr = shutil.which("xrandr")
+    if xrandr:
+        try:
+            result = _run([xrandr, "--query"], 5)
+        except (OSError, subprocess.SubprocessError):
+            result = None
+        if result is not None and result.returncode == 0 and result.stdout.strip():
+            display["xrandr"] = result.stdout.strip()[:6000]
+
+    lspci = shutil.which("lspci")
+    if lspci:
+        try:
+            result = _run([lspci], 5)
+        except (OSError, subprocess.SubprocessError):
+            result = None
+        if result is not None and result.returncode == 0:
+            lines = [
+                line
+                for line in result.stdout.splitlines()
+                if any(name in line for name in ("VGA", "3D", "Display"))
+            ]
+            if lines:
+                display["pci_display"] = lines[:10]
+
+    if display:
+        return display
+    return {"unavailable": "No display information was found in /sys/class/drm or xrandr."}
 
 
 def _interfaces() -> list[dict[str, Any]]:
@@ -269,6 +342,7 @@ def collect_system() -> dict[str, Any]:
                 evidence["network"]["routes"] = routes
     elif evidence["os"] == "Linux":
         evidence["network"]["routes"] = _linux_routes()
+        evidence["display"] = _linux_display()
     elif evidence["os"] == "macOS":
         evidence["network"]["routes"] = _macos_routes()
 
