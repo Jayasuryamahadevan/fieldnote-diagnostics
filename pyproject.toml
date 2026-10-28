@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fieldnote-diagnostics"
+version = "0.3.0"
+description = "Read-only Windows, Linux and macOS diagnostics with any Ollama model"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jayasuryamahadevan" }]
+keywords = ["diagnostics", "windows", "ollama", "llm", "sysadmin"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Intended Audience :: System Administrators",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Systems Administration",
+]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "psutil>=5.9,<8",
+  "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "httpx>=0.27",
+  "pytest>=8",
+  "ruff>=0.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/Jayasuryamahadevan/fieldnote-diagnostics"
+Repository = "https://github.com/Jayasuryamahadevan/fieldnote-diagnostics"
+Issues = "https://github.com/Jayasuryamahadevan/fieldnote-diagnostics/issues"
+
+[project.scripts]
+fieldnote = "fieldnote.cli:main"
+fieldnote-diagnostics = "fieldnote.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["fieldnote*"]
+
+[tool.setuptools.package-data]
+fieldnote = ["index.html", "system_prompt.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

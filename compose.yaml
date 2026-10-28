@@ -1,0 +1,16 @@
+services:
+  diagnostics:
+    build: .
+    image: fieldnote-diagnostics:local
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      DIAG_MODEL: ${DIAG_MODEL:-nemotron-3-nano:30b-cloud}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

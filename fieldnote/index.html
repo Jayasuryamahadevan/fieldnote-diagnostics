@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Fieldnote Diagnostics</title>
+  <style>
+    :root{font-family:Inter,system-ui,sans-serif;color:#e7edf8;background:#0b1220}
+    *{box-sizing:border-box}
+    body{margin:0}
+    main{max-width:900px;margin:0 auto;padding:40px 20px}
+    header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:48px}
+    .brand{font-weight:800;letter-spacing:-.03em;font-size:22px}
+    .brand span{color:#6ee7b7}
+    .chip{padding:7px 12px;border:1px solid #334155;border-radius:99px;color:#a9b8ca;font-size:13px;text-align:right}
+    h1{font-size:clamp(34px,6vw,60px);letter-spacing:-.05em;margin:0 0 12px}
+    p{color:#a9b8ca;line-height:1.6}
+    .panel{background:#111d30;border:1px solid #27364c;border-radius:18px;padding:24px;margin:24px 0;box-shadow:0 14px 38px #0002}
+    label{display:block;font-weight:650;margin:15px 0 7px}
+    textarea,input{width:100%;border-radius:10px;border:1px solid #364962;background:#0d1727;color:#e7edf8;font:inherit;padding:13px}
+    textarea{min-height:120px;resize:vertical}
+    button{background:#6ee7b7;color:#082019;border:0;border-radius:10px;font:inherit;font-weight:750;padding:12px 18px;cursor:pointer;margin-top:20px}
+    button:disabled{opacity:.55;cursor:wait}
+    .meta{font-size:13px;color:#94a3b8}
+    pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0b1524;padding:18px;border-radius:10px;color:#dce8f7;line-height:1.6}
+    details{margin-top:20px}
+    summary{cursor:pointer;color:#a9b8ca}
+    .error{color:#fda4af}
+    .success{color:#6ee7b7}
+    @media (max-width:620px){header{align-items:flex-start;flex-direction:column}.chip{text-align:left}}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="brand">fieldnote<span>.</span></div>
+      <div id="status" class="chip">Checking host...</div>
+    </header>
+
+    <h1>Understand what&rsquo;s wrong.</h1>
+    <p>Describe a problem. Fieldnote collects a small set of read-only system facts and asks your Ollama model to explain what the evidence supports.</p>
+
+    <section class="panel">
+      <form id="form">
+        <label for="complaint">What is happening?</label>
+        <textarea id="complaint" maxlength="4000" required placeholder="For example: Wi-Fi is connected, but websites will not load."></textarea>
+
+        <label for="host">DNS test hostname (optional)</label>
+        <input id="host" placeholder="example.com" autocomplete="off">
+
+        <label for="model">Ollama model (optional)</label>
+        <input id="model" list="models" placeholder="Server default" autocomplete="off">
+        <datalist id="models"></datalist>
+
+        <p class="meta">Leave the model blank to use the server default. Any model the local Ollama daemon can run works, including cloud models. The complaint and evidence go to that model.</p>
+        <button id="submit">Analyze this device</button>
+      </form>
+    </section>
+
+    <section id="result" class="panel" hidden>
+      <h2>Analysis</h2>
+      <pre id="analysis"></pre>
+      <details>
+        <summary>Collected evidence</summary>
+        <pre id="evidence"></pre>
+      </details>
+    </section>
+
+    <p class="meta">The web app analyzes only. It never runs repairs. A container inspects the container, not the host PC.</p>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function loadStatus() {
+      try {
+        const response = await fetch('/api/status');
+        const status = await response.json();
+        const container = status.container ? ' container' : '';
+        const readiness = status.ollama_available ? 'Ollama ready' : 'Ollama unavailable';
+        $('status').textContent = `${status.os}${container} · v${status.version} · ${readiness}`;
+        if (status.model) $('model').placeholder = status.model;
+      } catch {
+        $('status').textContent = 'Service unavailable';
+      }
+    }
+
+    async function loadModels() {
+      try {
+        const response = await fetch('/api/models');
+        const data = await response.json();
+        const list = $('models');
+        list.replaceChildren();
+        for (const name of data.models || []) {
+          const option = document.createElement('option');
+          option.value = name;
+          list.appendChild(option);
+        }
+      } catch {
+        /* The model field stays free-text. */
+      }
+    }
+
+    $('form').onsubmit = async (event) => {
+      event.preventDefault();
+      const button = $('submit');
+      const result = $('result');
+      button.disabled = true;
+      button.textContent = 'Analyzing...';
+      result.hidden = false;
+      $('analysis').textContent = 'Collecting evidence and asking Ollama...';
+      $('analysis').className = '';
+      try {
+        const response = await fetch('/api/diagnose', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            complaint: $('complaint').value,
+            dns_host: $('host').value.trim() || null,
+            model: $('model').value.trim() || null
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Request failed');
+        $('analysis').textContent = data.analysis;
+        $('evidence').textContent = JSON.stringify(data.evidence, null, 2);
+        $('status').textContent = `${data.evidence.os} · ${data.model} · analysis complete`;
+      } catch (error) {
+        $('analysis').textContent = error.message;
+        $('analysis').className = 'error';
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Analyze this device';
+      }
+    };
+
+    loadStatus();
+    loadModels();
+  </script>
+</body>
+</html>
